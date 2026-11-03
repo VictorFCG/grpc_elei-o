@@ -28,9 +28,7 @@ estilo Raft e leitura eventual em qualquer nó, seguindo a figura de arquitetura
 | `client.py` | Cliente interativo com redirecionamento e leitura em qualquer nó |
 | `config.py` | Portas, quórum, intervalos e timeouts |
 | `storage.py` | Persistência em JSON |
-| `run_node.sh`, `run_client.sh` | Atalhos de execução |
-| `gerar_proto.sh` | Regenera o código gRPC |
-| `limpar_dados.sh` | Apaga `data/` para começar uma demonstração limpa |
+| `executar.sh` | Script único: abre os 4 nós e o cliente em abas do tmux; também para, limpa dados, regenera o proto e inicia um processo isolado |
 
 Cada nó persiste em `data/node<id>/`:
 
@@ -40,7 +38,8 @@ Cada nó persiste em `data/node<id>/`:
 
 ## Instalação
 
-Requisitos: Python 3 e as bibliotecas `grpcio`, `grpcio-tools` e `protobuf`.
+Requisitos: Python 3, as bibliotecas `grpcio`, `grpcio-tools` e `protobuf`, e o `tmux`
+para abrir as abas.
 
 ```bash
 python3 -m pip install -r requirements.txt
@@ -56,26 +55,44 @@ python3 -m pip install --user --break-system-packages -r requirements.txt
 O código gerado já está no repositório. Para regenerá-lo:
 
 ```bash
-./gerar_proto.sh
+./executar.sh proto
 ```
 
 ## Como executar
 
-Abra 5 terminais no diretório do projeto.
-
-Terminal 1 a 4 (um nó por terminal):
+O script único abre o cliente e os 4 nós em 5 abas do tmux:
 
 ```bash
-./run_node.sh 1
-./run_node.sh 2
-./run_node.sh 3
-./run_node.sh 4
+./executar.sh
 ```
 
-Terminal 5 (cliente, pode iniciar em qualquer nó):
+A aba **Cliente** é selecionada; as abas **Nó 1** a **Nó 4** mostram o status de cada nó.
+Para trocar de aba use `Ctrl+B` e depois `n` (próxima), `p` (anterior) ou o número da aba.
+O mouse está habilitado, então também é possível clicar na aba.
+
+Se o script for executado fora de um terminal interativo, ele apenas cria a sessão e
+informa como entrar:
 
 ```bash
-./run_client.sh 1
+tmux attach -t cluster_grpc
+```
+
+Para sair da visualização sem encerrar o cluster, use `Ctrl+B` e depois `d`.
+Ao encerrar um processo com `Ctrl+C`, a aba permanece com um shell no diretório do
+projeto; para religar aquele nó, execute na própria aba:
+
+```bash
+python3 node.py 3
+```
+
+Outros comandos do script:
+
+```bash
+./executar.sh parar        # encerra a sessão e todos os processos
+./executar.sh limpar       # apaga data/ (use com a sessão parada)
+./executar.sh node 3       # inicia só o nó 3 no terminal atual
+./executar.sh client 2     # inicia o cliente apontando para o nó 2
+./executar.sh proto        # regenera raft_pb2*.py
 ```
 
 Portas: nó 1 = 50051, nó 2 = 50052, nó 3 = 50053, nó 4 = 50054.
@@ -123,10 +140,11 @@ papel, termo e commit daquele nó.
 
 ## Roteiro dos cenários de apresentação
 
-Antes de começar, para limpar dados de execuções anteriores:
+Antes de começar, pare a sessão anterior e limpe os dados:
 
 ```bash
-./limpar_dados.sh
+./executar.sh parar
+./executar.sh limpar
 ```
 
 ### 1. Escrita normal e leitura distribuída
@@ -138,14 +156,14 @@ Antes de começar, para limpar dados de execuções anteriores:
 
 ### 2. Eleição automática por queda do líder
 
-1. Identifique o líder no status do cluster e encerre o processo dele (`Ctrl+C`).
+1. Identifique o líder no status do cluster e encerre o processo dele com `Ctrl+C` na aba correspondente.
 2. Em até cerca de 1,5 s os seguidores detectam a ausência de Fetch e iniciam eleição.
 3. O status mostra um novo líder com termo incrementado.
 4. Leia um dado em qualquer nó sobrevivente: os dados comitados continuam disponíveis.
 
 ### 3. Bloqueio por perda de quórum
 
-1. Encerre dois seguidores (`Ctrl+C`), deixando apenas o líder e um seguidor.
+1. Encerre dois seguidores com `Ctrl+C` nas abas correspondentes, deixando apenas o líder e um seguidor.
 2. Aguarde cerca de 2 s para o `HEARTBEAT_TIMEOUT` expirar.
 3. Tente uma escrita no líder.
 4. O líder recusa imediatamente com `sem quórum ativo: escrita bloqueada`.
@@ -153,11 +171,11 @@ Antes de começar, para limpar dados de execuções anteriores:
 
 ### 4A. Recuperação de réplica desatualizada
 
-1. Encerre um seguidor.
+1. Encerre um seguidor com `Ctrl+C` na aba dele.
 2. Faça duas ou três escritas com sucesso no líder.
-3. Religue o seguidor:
+3. Religue o seguidor na própria aba:
    ```bash
-   ./run_node.sh 3
+   python3 node.py 3
    ```
 4. Ele busca os dados faltantes via FetchRequest e o status mostra `log` e `commit`
    iguais aos dos demais. A leitura passa a responder no nó religado.
@@ -165,19 +183,19 @@ Antes de começar, para limpar dados de execuções anteriores:
 ### 4B. Truncamento por divergência
 
 Este cenário precisa que o líder grave uma entrada sem replicá-la e caia antes do commit.
-Use `Ctrl+Z` nos terminais dos seguidores para pausá-los ou `kill -STOP <pid>`.
+Use `Ctrl+Z` nas abas dos seguidores para pausá-los ou `kill -STOP <pid>`.
 
 1. Suba o cluster completo e faça uma escrita que seja comitada.
-2. Pause os três seguidores (`Ctrl+Z` nos três terminais).
+2. Pause os três seguidores (`Ctrl+Z` nas três abas).
 3. Imediatamente envie uma nova escrita ao líder. Como o líder ainda considera os
    seguidores ativos (janela de 1,5 s), ele grava a entrada no log e fica aguardando commit.
-4. Antes dos 4 s, encerre o líder com `Ctrl+C` (ou `kill -9 <pid>`).
-5. Retome os três seguidores (`fg` em cada terminal). Eles elegem um novo líder com
+4. Antes dos 4 s, encerre o líder com `Ctrl+C` na aba dele (ou `kill -9 <pid>`).
+5. Retome os três seguidores (`fg` em cada aba). Eles elegem um novo líder com
    termo maior; a entrada não comitada não existe no log deles.
 6. Faça uma nova escrita com sucesso no novo líder.
-7. Religue o líder antigo:
+7. Religue o líder antigo na própria aba:
    ```bash
-   ./run_node.sh <id_do_lider_antigo>
+   python3 node.py <id_do_lider_antigo>
    ```
 8. Ele vira seguidor, detecta a divergência, trunca a entrada antiga e recebe a entrada
    correta. O log do nó religado deve mostrar a mensagem `truncou o log a partir do índice ...`.
@@ -196,7 +214,8 @@ Use `Ctrl+Z` nos terminais dos seguidores para pausá-los ou `kill -STOP <pid>`.
 ## Observações
 
 - `Ctrl+C` encerra o processo de forma limpa; o estado já está persistido em disco.
-- `Ctrl+Z` apenas pausa o processo (SIGSTOP); use `fg` para retomá-lo.
+  A aba continua aberta com um shell para religar o nó quando quiser.
+- `Ctrl+Z` apenas pausa o processo (SIGSTOP); use `fg` na mesma aba para retomá-lo.
 - Uma escrita rejeitada por falta de quórum pode já ter sido gravada no log do líder.
   Se o quórum voltar antes do timeout, ela pode ser comitada; se o líder cair, ela é
   descartada pelo truncamento no próximo líder, como no cenário 4B.
