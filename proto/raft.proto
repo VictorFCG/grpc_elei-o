@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+package raft;
+
+message EntradaLog {
+  int64 indice = 1;
+  int64 termo = 2;
+  string operacao = 3;
+  string chave = 4;
+  string valor = 5;
+}
+
+message RequisicaoVoto {
+  int32 id_candidato = 1;
+  int64 termo = 2;
+  int64 ultimo_indice = 3;
+  int64 ultimo_termo = 4;
+}
+
+message RespostaVoto {
+  int64 termo = 1;
+  bool voto_concedido = 2;
+}
+
+message RequisicaoFetch {
+  int32 id_seguidor = 1;
+  int64 termo = 2;
+  int64 ultimo_indice = 3;
+  int64 ultimo_termo = 4;
+}
+
+message RespostaFetch {
+  int64 termo = 1;
+  bool sucesso = 2;
+  int32 id_lider = 3;
+  int64 indice_commit = 4;
+  int64 ultimo_indice_lider = 5;
+  repeated EntradaLog entradas = 6;
+}
+
+message RequisicaoEscrita {
+  string chave = 1;
+  string valor = 2;
+}
+
+message RespostaEscrita {
+  bool sucesso = 1;
+  string mensagem = 2;
+  int32 id_lider = 3;
+  int64 termo = 4;
+  int64 indice = 5;
+}
+
+message RequisicaoLeitura {
+  string chave = 1;
+}
+
+message RespostaLeitura {
+  bool encontrado = 1;
+  string valor = 2;
+  string papel = 3;
+  int64 termo = 4;
+  int64 indice_commit = 5;
+  int32 id_lider = 6;
+}
+
+message RequisicaoStatus {
+}
+
+message RespostaStatus {
+  int32 id = 1;
+  string papel = 2;
+  int64 termo = 3;
+  int64 indice_commit = 4;
+  int64 tamanho_log = 5;
+  int32 id_lider = 6;
+}
+
+service ServicoRaft {
+  rpc RequestVote(RequisicaoVoto) returns (RespostaVoto);
+  rpc Fetch(RequisicaoFetch) returns (RespostaFetch);
+}
+
+service ServicoCliente {
+  rpc Write(RequisicaoEscrita) returns (RespostaEscrita);
+  rpc Read(RequisicaoLeitura) returns (RespostaLeitura);
+  rpc Status(RequisicaoStatus) returns (RespostaStatus);
+}
