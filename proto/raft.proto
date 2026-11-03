@@ -1,3 +1,13 @@
+// Contrato gRPC do cluster.
+//
+// "A comunicação entre todos os nós deve ser realizada exclusivamente via gRPC."
+// "FetchRequest como Heartbeat: as réplicas enviam requisições periódicas de
+// FetchRequest ao líder (ex: a cada 100ms) informando seu último termo e último índice."
+// "FetchResponse (Novos Dados + commit_index)"
+// "Gravação (gRPC)", "Confirmação de Commit (gRPC)", "Consulta (gRPC)"
+//
+// O serviço ServicoRaft é usado entre os nós; o ServicoCliente atende o cliente.
+
 syntax = "proto3";
 
 package raft;

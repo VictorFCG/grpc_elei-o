@@ -53,8 +53,8 @@ from storage import carregar_json, salvar_json
 
 
 class Node(raft_pb2_grpc.ServicoRaftServicer, raft_pb2_grpc.ServicoClienteServicer):
-    def __init__(self, id_no):
-        self.id = id_no
+    def __init__(self, id_node):
+        self.id = id_node
         self.cond = threading.Condition()
         self.papel = "seguidor"
         self.termo = 0
@@ -68,13 +68,13 @@ class Node(raft_pb2_grpc.ServicoRaftServicer, raft_pb2_grpc.ServicoClienteServic
         self.ultimo_contato_lider = time.monotonic()
         self.inicio_eleicao = 0.0
         self.timeout_eleicao = self.sortear_timeout()
-        self.ultimo_fetch = {id_no: 0.0 for id_no in NOS}
-        self.match = {id_no: 0 for id_no in NOS}
+        self.ultimo_fetch = {id_node: 0.0 for id_node in NOS}
+        self.match = {id_node: 0 for id_node in NOS}
         self.ultimo_envio_fetch = 0.0
         self.ultima_impressao = 0.0
         self.parar = False
 
-        self.pasta = os.path.join(PASTA_DADOS, f"node{id_no}")
+        self.pasta = os.path.join(PASTA_DADOS, f"node{id_node}")
         self.caminho_estado = os.path.join(self.pasta, "estado.json")
         self.caminho_log = os.path.join(self.pasta, "log.json")
         self.caminho_banco = os.path.join(self.pasta, "banco.json")
@@ -88,12 +88,12 @@ class Node(raft_pb2_grpc.ServicoRaftServicer, raft_pb2_grpc.ServicoClienteServic
 
     def criar_stubs(self):
         stubs = {}
-        for id_no, dados in NOS.items():
-            if id_no == self.id:
+        for id_node, dados in NOS.items():
+            if id_node == self.id:
                 continue
             canal = grpc.insecure_channel(f"{dados['host']}:{dados['porta']}")
             self.canais.append(canal)
-            stubs[id_no] = raft_pb2_grpc.ServicoRaftStub(canal)
+            stubs[id_node] = raft_pb2_grpc.ServicoRaftStub(canal)
         return stubs
 
     def carregar(self):
@@ -183,25 +183,22 @@ class Node(raft_pb2_grpc.ServicoRaftServicer, raft_pb2_grpc.ServicoClienteServic
     def replicas_ativas(self):
         agora = time.monotonic()
         ativas = [self.id]
-        for id_no in NOS:
-            if id_no == self.id:
+        for id_node in NOS:
+            if id_node == self.id:
                 continue
-            if agora - self.ultimo_fetch.get(id_no, 0.0) <= HEARTBEAT_TIMEOUT:
-                ativas.append(id_no)
+            if agora - self.ultimo_fetch.get(id_node, 0.0) <= HEARTBEAT_TIMEOUT:
+                ativas.append(id_node)
         return ativas
-
-    def tem_quorum_ativo(self):
-        return len(self.replicas_ativas()) >= QUORUM
 
     def calcular_commit(self):
         if self.papel != "lider":
             return
         for indice in range(len(self.log), self.indice_commit, -1):
             confirmacoes = 1
-            for id_no in NOS:
-                if id_no == self.id:
+            for id_node in NOS:
+                if id_node == self.id:
                     continue
-                if self.match.get(id_no, 0) >= indice:
+                if self.match.get(id_node, 0) >= indice:
                     confirmacoes += 1
             if confirmacoes >= QUORUM:
                 self.indice_commit = indice
@@ -218,9 +215,10 @@ class Node(raft_pb2_grpc.ServicoRaftServicer, raft_pb2_grpc.ServicoClienteServic
                 return raft_pb2.RespostaVoto(termo=self.termo, voto_concedido=False)
 
             pode_votar = self.voted_for in (0, requisicao.id_candidato)
-            log_ok = self.log_mais_atualizado(requisicao.ultimo_indice, requisicao.ultimo_termo)
-            conceder = pode_votar and log_ok
-            if conceder:
+            log_ok = self.log_mais_atualizado(
+                requisicao.ultimo_indice, requisicao.ultimo_termo
+            )
+            if pode_votar and log_ok:
                 self.voted_for = requisicao.id_candidato
                 self.ultimo_contato_lider = time.monotonic()
                 self.timeout_eleicao = self.sortear_timeout()
@@ -230,21 +228,15 @@ class Node(raft_pb2_grpc.ServicoRaftServicer, raft_pb2_grpc.ServicoClienteServic
                     f"nó {requisicao.id_candidato} no termo {self.termo}",
                     flush=True,
                 )
-            return raft_pb2.RespostaVoto(termo=self.termo, voto_concedido=conceder)
+            return raft_pb2.RespostaVoto(
+                termo=self.termo, voto_concedido=pode_votar and log_ok
+            )
 
     def Fetch(self, requisicao, contexto):
         with self.cond:
             if requisicao.termo > self.termo:
                 self.atualizar_termo(requisicao.termo)
-            if requisicao.termo < self.termo:
-                return raft_pb2.RespostaFetch(
-                    termo=self.termo,
-                    sucesso=False,
-                    id_lider=self.id_lider or 0,
-                    indice_commit=self.indice_commit,
-                    ultimo_indice_lider=len(self.log),
-                )
-            if self.papel != "lider":
+            if requisicao.termo < self.termo or self.papel != "lider":
                 return raft_pb2.RespostaFetch(
                     termo=self.termo,
                     sucesso=False,
@@ -298,7 +290,7 @@ class Node(raft_pb2_grpc.ServicoRaftServicer, raft_pb2_grpc.ServicoClienteServic
                     termo=self.termo,
                     indice=0,
                 )
-            if not self.tem_quorum_ativo():
+            if len(self.replicas_ativas()) < QUORUM:
                 print(
                     f"[{time.strftime('%H:%M:%S')}] Nó {self.id} recusou escrita: "
                     "sem quórum ativo",
@@ -474,13 +466,13 @@ class Node(raft_pb2_grpc.ServicoRaftServicer, raft_pb2_grpc.ServicoClienteServic
                 if self.id_lider == id_lider:
                     self.id_lider = None
 
-        for id_no in NOS:
-            if id_no == self.id:
+        for id_node in NOS:
+            if id_node == self.id:
                 continue
             with self.cond:
                 requisicao = self.montar_requisicao_fetch()
             try:
-                resposta = self.stubs[id_no].Fetch(requisicao, timeout=TIMEOUT_RPC)
+                resposta = self.stubs[id_node].Fetch(requisicao, timeout=TIMEOUT_RPC)
             except grpc.RpcError:
                 continue
             self.processar_resposta_fetch(resposta)
@@ -491,19 +483,19 @@ class Node(raft_pb2_grpc.ServicoRaftServicer, raft_pb2_grpc.ServicoClienteServic
         with self.cond:
             if self.papel == "lider":
                 return True
-        for id_no in NOS:
-            if id_no == self.id:
+        for id_node in NOS:
+            if id_node == self.id:
                 continue
             with self.cond:
                 requisicao = self.montar_requisicao_fetch()
             try:
-                resposta = self.stubs[id_no].Fetch(requisicao, timeout=TIMEOUT_RPC)
+                resposta = self.stubs[id_node].Fetch(requisicao, timeout=TIMEOUT_RPC)
             except grpc.RpcError:
                 continue
             self.processar_resposta_fetch(resposta)
             if resposta.sucesso:
                 return True
-            if resposta.id_lider == id_no:
+            if resposta.id_lider == id_node:
                 return True
         return False
 
@@ -524,11 +516,11 @@ class Node(raft_pb2_grpc.ServicoRaftServicer, raft_pb2_grpc.ServicoClienteServic
             votos = 1
             self.imprimir_status("iniciou eleição")
 
-        for id_no in NOS:
-            if id_no == self.id:
+        for id_node in NOS:
+            if id_node == self.id:
                 continue
             try:
-                resposta = self.stubs[id_no].RequestVote(
+                resposta = self.stubs[id_node].RequestVote(
                     raft_pb2.RequisicaoVoto(
                         id_candidato=self.id,
                         termo=termo_eleicao,
@@ -558,8 +550,9 @@ class Node(raft_pb2_grpc.ServicoRaftServicer, raft_pb2_grpc.ServicoClienteServic
                 return
             self.papel = "lider"
             self.id_lider = self.id
-            self.match = {id_no: 0 for id_no in NOS}
-            self.ultimo_fetch = {id_no: 0.0 for id_no in NOS}
+            self.match = {id_node: 0 for id_node in NOS}
+            agora = time.monotonic()
+            self.ultimo_fetch = {id_node: agora for id_node in NOS}
             self.imprimir_status("virou líder")
 
     def laco_principal(self):
